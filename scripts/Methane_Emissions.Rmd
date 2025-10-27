@@ -1,0 +1,303 @@
+---
+title: "Methane Emissions"
+author: "Daniel Kaufman"
+date: "2025-09-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(readr)
+
+# Replace with your actual file path
+all_flux_data_uncleaned <- read_csv("C:/Users/KAUFMADA/Documents/R_Files/windrow-fluxes-co2-model-improvements/windrow-fluxes-co2-model-improvements/data_clean/Flux_Data_With_Covars.csv")
+
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+CH4_NAREMOVED <- all_flux_data_uncleaned %>%
+  filter(
+    FCH4_DRY.LIN > 0,   # remove negatives and spurious NA codes
+    FCH4_DRY.LIN < 150000   # remove outliers - 1 large one 
+
+  )
+
+ggplot(CH4_NAREMOVED, aes(x = DOY, y = FCH4_DRY.LIN)) +
+  geom_point() +
+  theme_minimal() +
+  labs(title = "Time series of CH4 fluxes (raw)")
+
+```
+```{r}
+CH4_NAREMOVED <- CH4_NAREMOVED %>%
+  mutate(R2_flag_9 = FCH4_DRY.LIN_R2 > 0.9,
+        R2_flag_8 = FCH4_DRY.LIN_R2 > 0.8,
+         R2_flag_95 = FCH4_DRY.LIN_R2 > 0.95)
+
+# Plot R² threshold effect
+ggplot(CH4_NAREMOVED, aes(x = DOY, y = FCH4_DRY.LIN, color = R2_flag_9)) +
+  geom_point() +
+  theme_minimal() +
+  labs(title = "CH4 fluxes colored by R² > 0.9")
+
+```
+I choose .8 as it was the highest I could go without losing out on most of the early data. Not sure why, I think at the start of the cycle there as more variability in emissions. 
+
+```{r}
+CH4_NAREMOVED %>%
+  summarise(percent_retained = mean(FCH4_DRY.LIN_R2 > 0.9, na.rm = TRUE) * 100)
+
+```
+```{r}
+CH4_R_2_Filtered <- CH4_NAREMOVED %>%
+  filter(FCH4_DRY.LIN_R2 > 0.9)
+
+```
+
+```{r}
+hist(CH4_R_2_Filtered$FCH4_DRY.LIN, breaks = "FD",
+     main = "CH4 Emissions", xlab = "FCH4 (nmol/m²/s)")
+
+hist(log(CH4_R_2_Filtered$FCH4_DRY.LIN), breaks = "FD",
+     main = "Log CH4 Emissions", xlab = "log(FCH4)")
+
+
+
+```
+```{r}
+write_csv(CH4_R_2_Filtered, "CH4_R_2_Filtered_all.csv")
+
+```
+
+```{r}
+
+CH4_R_2_Filtered_Plot_Methane <- ggplot(CH4_R_2_Filtered, aes(x= DOY, y = FCH4_DRY.LIN, group = Chamber_Corrected, color = Pile)) +
+  geom_point() +
+  
+      # Vertical lines for sampling events
+  geom_vline(xintercept = c( 173, 191, 222, 249, 276), 
+             linetype = "dashed", color = "black", size = 0.2) +
+  
+  # Vertical lines for turning events
+  geom_vline(xintercept = c(159, 186, 208, 234, 262, 290), 
+             linetype = "dashed", color = "red", size = 0.8) +
+
+  labs(
+    title = " Methane Flux",
+    subtitle = "Chamber Fluxes by Treatment Group",
+    x = "Day of Year (DOY)",
+    y = expression(CH[4]~Flux~(nmol~m^{-2}~s^{-1})),
+    color = "Turning Regime"
+  ) +
+  
+ # Theme customization
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    legend.position = "top",
+    legend.title = element_text(face = "bold"),
+    legend.key.width = unit(1.5, "cm")
+  )
+
+# Display the plot
+print(CH4_R_2_Filtered_Plot_Methane)
+```
+```{r}
+library(ggplot2)
+
+Ch4_plot_by_chamber <- ggplot(CH4_R_2_Filtered, aes(x = DOY, y = FCH4_DRY.LIN, color = Pile)) +
+  
+  # Points per chamber
+  geom_point(aes(group = Chamber_Corrected), size = 2, alpha = 0.7) +
+  
+      # Vertical lines for sampling events
+  geom_vline(xintercept = c( 173, 191, 222, 249, 276), 
+             linetype = "dashed", color = "black", size = 0.2) +
+  
+  # Vertical lines for turning events
+  geom_vline(xintercept = c(159, 186, 208, 234, 262, 290), 
+             linetype = "dashed", color = "red", size = 0.8) +
+
+
+  # Facet by chamber
+  facet_wrap(~ Chamber_Corrected, ncol = 2, scales = "free_y") +
+
+  # Labels
+  labs(
+    title = "Ch4 Flux",
+    subtitle = "Chamber Fluxes by Treatment Group",
+    x = "Day of Year (DOY)",
+    y = expression(CH[4]~Flux~(nmol~m^{-2}~s^{-1})),  # using μmol instead of 'umol'
+    color = "Turning Regime"
+  ) +
+  
+  # Theme
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    strip.text = element_text(size = 12),
+    legend.position = "top",
+    legend.title = element_text(face = "bold"),
+    legend.key.width = unit(1.5, "cm")
+  )
+
+# Display the plot
+print(Ch4_plot_by_chamber)
+
+```
+
+
+```{r}
+# creating weekly average: 
+
+FCh4_weekly_pile <-  CH4_R_2_Filtered %>%
+  mutate(Week = floor(DOY/7)) %>%
+  group_by(Pile, Week) %>%
+    summarise(
+        FCh4_weekly_mean = mean(FCH4_DRY.LIN, na.rm = TRUE),
+    .groups = "drop"
+  )
+   
+```
+
+
+
+```{r}
+library(ggplot2)
+
+Ch4_plot_weekly_pile <- ggplot(FCh4_weekly_pile, aes(x = Week, y = FCh4_weekly_mean, color = Pile)) +
+  
+  # Points for weekly average per chamber
+  geom_point(aes(group = Pile), size = 2, alpha = 0.7) +
+  
+  # Optional: Add smoother if desired later, e.g., geom_smooth(method = "loess", se = FALSE)
+  
+  # Vertical lines for events (convert DOY to weeks for alignment)
+  geom_vline(xintercept = floor(c(159, 173, 186, 191, 208, 222, 234, 249, 262, 276, 290) / 7), 
+             linetype = "dashed", color = "black", size = 0.3) +
+  geom_vline(xintercept = floor(c(159, 186, 208, 234, 262, 290) / 7), 
+             linetype = "dashed", color = "red", size = 0.4) +
+
+  labs(
+    title = "Weekly-Averaged Methane Flux by Treatment",
+    subtitle = "Grouped by Treatment Regime",
+    x = "Week of Year",
+    y = expression(CH[4]~Flux~(nmol~m^{-2}~s^{-1})),
+    color = "Turning Regime"
+  ) +
+  
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    legend.position = "top",
+    legend.title = element_text(face = "bold"),
+    legend.key.width = unit(1.5, "cm")
+  )
+
+print(Ch4_plot_weekly_pile)
+
+
+```
+
+```{r}
+
+CH4_R_2_Filtered <- CH4_R_2_Filtered %>%
+  mutate(
+    SWC_1.initial_value = ifelse(SWC_1.initial_value > 0.9, NA, SWC_1.initial_value),
+  )
+CH4_R_2_Filtered <- CH4_R_2_Filtered %>%
+  mutate(
+    SWC_1.initial_value = ifelse(TS_1.initial_value < 0, NA, TS_1.initial_value),
+  )
+
+```
+
+```{r}
+CH4_R_2_Filtered <- CH4_R_2_Filtered %>%
+  filter(FCH4_DRY.LIN > 0) %>%  # Remove rows with 0 or negative values
+  mutate(log_FCH4_DRY.LIN = log(FCH4_DRY.LIN))
+```
+
+
+
+
+```{r}
+
+CH4_scaled <- CH4_R_2_Filtered %>%
+  mutate(un_scaled_DOY = DOY) %>%  # Save unscaled DOY for later use (e.g., autocorrelation)
+  mutate(across(where(is.numeric) & !matches("DOY"), scale))
+```
+
+```{r}
+# Step 2: Convert character variables to factors
+CH4_scaled_c <- CH4_scaled %>%
+  mutate(across(where(is.character), as.factor))
+
+```
+
+```{r}
+# Step 3: Fill NA in numeric columns with median value
+CH4_scaled_c <- CH4_scaled_c %>%
+  mutate(across(
+    where(is.numeric),
+    ~ ifelse(is.na(.), median(., na.rm = TRUE), .)
+  ))
+```
+
+
+```{r}
+# vars with interaction 
+interaction_terms <- c("TMPA", "SWC_1.initial_value", "TS_1.initial_value")
+
+# All predictors to include 
+predictors <- c(
+  "TMPA", "HMD", "BAR",
+  "SWC_1.initial_value", "TS_1.initial_value",
+  "BulkDensity", "DaysSinceLastTurn", "Chamber_Elevation"
+)
+                      
+```
+
+```{r}
+# Variables to use in additive form only
+additive_only <- setdiff(predictors, interaction_terms)
+# Build interaction part
+interaction_formula <- paste("Pile *", interaction_terms, collapse = " + ")
+
+# Build additive part
+additive_formula <- paste(additive_only, collapse = " + ")
+
+# Combine into full formula
+fixed_formula <- as.formula(
+  paste("log_FCH4_DRY.LIN ~", interaction_formula, "+", additive_formula)
+)
+```
+
+
+```{r}
+
+library(dplyr)
+
+CH4_scaled_c <- CH4_scaled_c %>%
+  arrange(Chamber_Corrected, un_scaled_DOY) %>%   # make sure it's ordered
+  group_by(Chamber_Corrected) %>%
+  mutate(time_index = row_number()) %>%           # time index unique within each chamber
+  ungroup()
+
+library(nlme)
+
+full_model <- lme(
+  fixed = fixed_formula,
+  random = ~1 | Chamber_Corrected,
+  correlation = corAR1(form = ~ time_index | Chamber_Corrected),
+  data = CH4_scaled_c,
+  na.action = na.exclude
+)
+
+summary(full_model)
+
+```
+
+

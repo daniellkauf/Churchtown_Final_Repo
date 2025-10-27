@@ -1,0 +1,6 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+data_raw/Dairy_Merged_file.csv
+data_raw/*.csv

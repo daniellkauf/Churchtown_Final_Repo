@@ -1,0 +1,320 @@
+---
+title: "Mixed_Linear_Regression"
+output: html_document
+date: "2025-07-23"
+---
+
+```{r}
+
+# importing libraries
+library(tidyverse)
+library(randomForest)
+library(dplyr)
+library(nlme)
+library(corrplot)
+library(reshape2)
+
+```
+
+
+```{r setup, include=FALSE}
+
+# working directory to import data
+setwd("C:/Users/KAUFMADA/Documents/R_Files/windrow-fluxes-co2-model-improvements/windrow-fluxes-co2-model-improvements/data_clean")
+
+#Preparing Data for Analysis
+
+# importing data set
+# r^2 cleaned dataset of co2 fluxes and explanatory variables
+FCO2_Cleaned<- read_csv("CO2_R_2_Filtered.csv")
+
+#Removing -9999 for data set, it was used as a placeholder but can impact regressions 
+FCO2_Cleaned[FCO2_Cleaned == -9999] <- NA
+
+# Removing variables which either repeat in other places or are not related to FCO2 directly (should I include other fluxes in modeling co2 - such as methane ?)
+FCO2_Cleaned <- FCO2_Cleaned %>%
+  select(-Date, -DATE_TIME,-R2_flag_8,-R2_flag_9,-R2_flag_95,-N2O_DRY.DEADBAND,-CH4_DRY.DEADBAND,-CO2_DRY.DEADBAND, -OBSERVATION,-FCO2_DRY
+,-FCO2_DRY.R2,-FCO2_DRY.LIN_R2,-FCH4_DRY.LIN_dCdt,-FCH4_DRY.dCdt,-FCH4_DRY,-FCH4_DRY.LIN_R2,-FCH4_DRY.R2,-FN2O_DRY,-FN2O_DRY.dCdt,-FN2O_DRY.R2,-FN2O_DRY.LIN_dCdt,-FN2O_DRY.LIN_R2,-CO2_DRY.initial_value,-CO2_DRY.range,-CO2_DRY.mean,-CO2_DRY.DEADBAND,-FCO2_DRY.LIN_dCdt,-FCO2_DRY.dCdt,-VOLUME_TOTAL,-TimeSinceStart,- DOY.initial_value, -PORT, -WNS,-N2O_DRY.mean,-N2O_DRY.initial_value,,-TS_1.range,-CDOY,-DOY_diff,-i.DOY)
+
+# Normalizing/scaling variables - to more easily see the impact of each variable/ to compare regression coefficients
+# not really needed 
+
+df_scaled <- FCO2_Cleaned %>%
+  mutate(un_scaled_DOY = DOY) %>%           # Step 1: store original DOY for later ac structure.
+  mutate(across(where(is.numeric) & !matches("DOY"), scale))  # Scale all numeric columns except DOY
+
+# factorize categorical variables
+df_categorized <- df_scaled %>%
+  mutate(across(where(is.character), as.factor))
+
+# checking if they are factorized
+sapply(df_categorized, is.factor)
+
+# filling in NA's with median value for that column - open to other ideas to fill in this data. 
+df_categorized <- df_categorized %>%
+  mutate(across(
+    where(is.numeric),
+    ~ ifelse(is.na(.), median(., na.rm = TRUE), .)
+  ))
+
+```
+
+There are still 25 variables - this model can be simplified. To understand the impact of each variable a correlation matrix can show us which variables are highly correlated. 
+
+```{r}
+
+# before choosing variables for the LME lets look at correlation matrix 
+# this is a mess, and there are too many variables to properly interpret the results
+
+# looking at only numerical variables
+numeric_vars <- df_categorized[sapply(df_categorized, is.numeric)]
+
+# creating corr matrix
+cor_matrix <- cor(numeric_vars, use = "pairwise.complete.obs", method = "pearson")
+#plotting matrix
+corrplot(
+  cor_matrix,
+  method = "color",         # Color-coded cells
+  type = "upper",           # Only upper triangle
+  col = colorRampPalette(c("blue", "white", "darkgreen"))(200),  # Custom colors
+  tl.cex = 0.7,             # Smaller font size for variable names
+  tl.col = "black",         # Text label color
+  tl.srt = 45,              # Rotate variable labels
+  addCoef.col = "black",    # Add correlation coefficients
+  number.cex = 0.5,         # Size of coefficient text
+  mar = c(0, 0, 1, 0)       # Reduce margin space
+)
+
+# extracting highest cor 
+threshold <- 0.7  #.7 is a personal choice
+
+# Set the diagonal to 0 to ignore self-correlation
+cor_matrix_no_diag <- cor_matrix
+diag(cor_matrix_no_diag) <- 0
+
+# Get variables that have at least one |cor| > threshold
+keep_vars <- names(which(apply(abs(cor_matrix_no_diag), 1, function(x) any(x > threshold))))
+
+cor_subset <- cor_matrix[keep_vars, keep_vars]
+cor_long <- melt(cor_subset)
+
+# pairwise list of highest corr in data set
+high_corr_pairs <- subset(cor_long, abs(value) > threshold & Var1 != Var2)
+print(high_corr_pairs)
+
+```
+
+The variables which exhibit high levels of autocorrelation are not surprising. DOY is highly correlated with many variables due to the nature of sampling - large ranges of DOY share a single value as Bulk density, total turns etc. A surprising variable was the correlation between DOY and soil moisture - yet this may be due to seasonal patterns as soil drys out as summer progresses leading to lower average values as the summer progresses. 
+
+```{r}
+
+# a basic linear model gives us an idea of the relationship - we are looking here are scaled data - furthermore it is important to not despite the data being scaled it does not mean that one variable is more important than the other as the ranges are not the same. 
+
+full_lm <- lm(FCO2_DRY.LIN ~ ., data = df_scaled)
+summary(full_lm)
+
+# Key takeaways - Days since turning is important, more important than total turns, 
+# bulk density is important, chamber elevation is important. Stevens probe measurements and watchdog data will be part of the model. 
+# odd that wind direction matters, is that because of the wind or is that correlated with something? 
+
+# using random forest as well:
+# had to change u* name to avoid issues
+
+# TA.range - which is chamber tempurate was an important varaible. Not sure if this is correlation or causation - not sure about this varaible. While it improves the model - im not sure what it represents. 
+
+
+df_categorized <- df_categorized %>%
+  rename(u_star = `u*`)
+
+rf_model <- randomForest(FCO2_DRY.LIN ~ ., data = df_categorized, importance = TRUE, na.action = na.omit)
+
+# Example 1: Increase margins and text size
+par(mar = c(5, 8, 4, 2))  # Increase left margin for long labels
+varImpPlot(rf_model, cex = 0.8)  # cex = character size
+
+```
+
+In our Linear Model with 26 variables we can explain around 50% of the variability in magnitude of flux. Based on the basic linear model variables which are significant (not necessarily important just significant this is not looking at effect size). Pile, Chamber 3 (not sure about what is going on here), Chamber 2 to a lesser extent, Chamber elevation, windspeed, Temp Range (TA range which is temp range measured in chamber), pile temperature, bulk density, days since last turn, total turns. 
+
+Some of these relationships can be explored more - for example what is going on in chamber 3 and to a lesser extent 1. 
+what is the relationship between airtemp range in chamber and emissions - I'm assuming it is positive. Is this a sign of advection? 
+
+Looking at the random forest model there are similiar trends.Looking at variables with the highest %IncMSE 
+- Chamber
+- Days since last turn
+- SWC intial value 
+- TS initial value
+- Bulk Density
+- TA range
+- Chamber elevation
+- meterological var
+- total turns is further down - interesting - though it still is an importnat variable
+
+Both linear and RF models help us select important variables for Mixed effects Model. 
+
+```{r}
+
+# To help with model building removing outliers (being generous with a 2 times IQR could use a higher value as there are likely spikes from turning)
+
+# defining the quantiles
+Q1 <- quantile(df_categorized$FCO2_DRY.LIN, 0.25)
+Q3 <- quantile(df_categorized$FCO2_DRY.LIN, 0.75)  
+# the interquartile range
+iqr_val <- IQR(df_categorized$FCO2_DRY.LIN, na.rm = TRUE)
+
+# creating the boundaries
+lower_bound <- Q1 - 2* iqr_val
+upper_bound <- Q3 + 2* iqr_val
+
+# Filtering out outliers - 
+Scaled_Cleaned_Co2_data <- df_categorized[df_categorized$FCO2_DRY.LIN >= lower_bound & df_categorized$FCO2_DRY.LIN <= upper_bound, ]
+
+# creating the base model.
+
+# Variable choice:
+
+# Pile 
+# Initial Soil Water Content from Steven's Probe
+# Initial Temperature value from the Steven's Probe
+# TMP - outside temp 
+# BAR - pressure 
+# Bulk Density 
+# Chamber Elevation 
+# Total turns
+# HMD - Humidity
+# TA.range
+
+# Base model
+
+gls.co2 = gls(FCO2_DRY.LIN ~ Pile, na.action = na.omit, data = Scaled_Cleaned_Co2_data)
+
+# Base linear mixed effects model, Random effect of chamber
+
+lme_base_model <- lme(
+  FCO2_DRY.LIN ~ Pile + SWC_1.initial_value + TS_1.initial_value +
+    TMP + BAR + BulkDensity + Chamber_Elevation +
+    DaysSinceLastTurn + TotalTurns + HMD + TA.range,
+  random = ~ 1 | Chamber_Corrected,
+  data = Scaled_Cleaned_Co2_data,
+  na.action = na.omit
+)
+
+summary(lme_base_model)
+plot(lme_base_model)
+qqnorm(lme_base_model)
+
+
+# Base linear mixed effects model, Random effect of chamber pile
+
+lme_base_model_pile <- lme(
+FCO2_DRY.LIN ~ Pile + SWC_1.initial_value + TS_1.initial_value +
+    TMP + BAR + BulkDensity + Chamber_Elevation +
+    DaysSinceLastTurn + TotalTurns + HMD + TA.range,
+  random = ~ 1 | Pile,
+  data = Scaled_Cleaned_Co2_data,
+  na.action = na.omit
+)
+
+summary(lme_base_model_pile)
+plot(lme_base_model_pile)
+qqnorm(lme_base_model_pile)
+
+
+# Create a dataframe of model AIC and BIC
+model_stats <- tibble(
+  Model = c("No Random Effects", "Chamber", "Pile"),
+  AIC = c(AIC(gls.co2), AIC(lme_base_model), AIC(lme_base_model_pile)),
+  BIC = c(BIC(gls.co2), BIC(lme_base_model), BIC(lme_base_model_pile))
+)
+print(model_stats)
+# When chamber is the random effect BAR and Bulk density add to the model, yet when pile is used as a random effect (which I do not think makes sense) they stop being significant. Why is that ? 
+
+```
+The best model is the Chamber with the lowest AIC and BIC values followed by pile which also significantly improves model. Here a crucial question what does the random effect of chamber tell us. Do we expect each chamber to behave differently or this just masking the impact of management?
+
+```{r}
+
+lme_base_model_nested <- lme(
+FCO2_DRY.LIN ~ Pile + SWC_1.initial_value + TS_1.initial_value +
+    TMP + BAR + BulkDensity + Chamber_Elevation +
+    DaysSinceLastTurn + TotalTurns + HMD + TA.range,
+  random = ~ 1 | Pile/Chamber_Corrected,
+  data = Scaled_Cleaned_Co2_data,
+  na.action = na.omit
+)
+
+anova(lme_base_model_pile,lme_base_model_nested)
+
+```
+# Nested model is better than just pile but not different from chamber model in the previous comparison. 
+
+```{r}
+
+# for auto correlation we will use DOY - but unscaled to avoid negative values: 
+
+Scaled_Cleaned_Co2_data %>%
+  group_by(Chamber_Corrected) %>%
+  arrange(DOY, .by_group = TRUE) %>%
+  summarise(repeats = any(duplicated(DOY)))
+
+# while dates don't repeat, for the scaled date there are some repeats which we have to get rid of for autocorrelation.
+
+Scaled_Cleaned_Co2_data <- Scaled_Cleaned_Co2_data %>%
+  group_by(Chamber_Corrected, un_scaled_DOY) %>%
+  filter(row_number() == 1) %>%  # Keep only first occurrence
+  ungroup()
+
+Scaled_Cleaned_Co2_data <- Scaled_Cleaned_Co2_data %>%
+  mutate(un_scaled_DOY = as.numeric(unlist(un_scaled_DOY)))
+
+Scaled_Cleaned_Co2_data <- Scaled_Cleaned_Co2_data %>%
+  arrange(Chamber_Corrected, un_scaled_DOY) %>%
+  group_by(Chamber_Corrected) %>%
+  mutate(measurement_index = row_number()) %>%
+  ungroup()
+
+# Add AR(1) autocorrelation structure based on DOY (or time variable) - by chamber not as a whole.
+
+lme_ac <- update(
+  lme_base_model,
+  correlation = corAR1(form = ~ measurement_index | Chamber_Corrected)
+)
+
+# letting variance change by pile: 
+
+lme_var_pile <- update(lme_base_model, weights = varIdent(form = ~1 | Pile))
+
+# letting variance change by chamber: 
+
+lme_var_chamber <- update(lme_base_model, weights = varIdent(form = ~1 | Chamber_Corrected))
+
+# Compare the models
+
+BIC(lme_base_model,lme_ac, lme_var_pile, lme_var_chamber)
+
+# the BIC of the adding AC improves alot. Out of the adding different variances, it only improves the model fit with chamber. 
+
+# combining ac and var 
+
+lme_ac_var <- update(
+  lme_ac,
+  weights = varIdent(form = ~1 | Chamber_Corrected),
+  control = lmeControl(maxIter = 100, msMaxIter = 100, niterEM = 50)
+)
+
+# comparing the added ac_var model 
+
+BIC(lme_base_model,lme_var_chamber, lme_ac,lme_ac_var)
+summary(lme_ac_var)
+plot(lme_ac_var)
+qqnorm(resid(lme_ac_var))
+qqline(resid(lme_ac_var))
+
+
+# Points of Further Discussion
+
+# Most importantly - what exactly do we want to say about management - rate of emissions do not seems to be correlated to Pile, but more on other environmental variables at a give point in time, but relationship might be shorter term (days since last turn) when there is still plenty of substrate ? IDK. 
+
+```
+
+Clearly pile does not explain any of the variation in our model - yet pile is not the only variable that is related to management. How do we convey the impact of turning visually and create a narrative which details the impact of turning rate.
