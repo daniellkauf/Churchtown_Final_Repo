@@ -79,7 +79,7 @@ CH4_NAREMOVED %>%
 
 # .9 is a good starting point, and a commonly used figure in the literature WE WILL BE USING 0.9 R^2 FOR OUR LINEAR Ch4 FLUX THRESHOLD MIN R^2
 
-# As the data shows usng a high r^2 eliminates small fluxes. Let's look at low fluxes to see if we can 
+# As the data shows using a high r^2 eliminates small fluxes. Let's look at low fluxes to see if we can 
 # find measurements that have poor r^2 because there is little to no flux.
 
 # Zooming into the low flux measurements

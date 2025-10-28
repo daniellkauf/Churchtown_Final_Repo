@@ -136,7 +136,7 @@ boxplot(log(CO2_R_2_Filtered$FCO2_DRY.LIN)~ Pile, data = CO2_R_2_Filtered,
         main = "Log-transformed FCO2", 
         ylab = "Log(FCO2)", xlab = "Windrow")
 
-# they seem similar, the control pile has more outliers, maybe due to more frequent turning events ?
+# they seem similar, the control pile has more outliers especially on the lower values, maybe due to more frequent turning events ?
 # We have our data set lets export it into a csv and explore the hypothesis: 
 
 write_csv(CO2_R_2_Filtered, "data_clean/CO2_R_2_Filtered.csv")
